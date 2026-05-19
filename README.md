@@ -3,15 +3,13 @@
       Suno AI API
   </h1>
   <p>Use API to call the music generation AI of Suno.ai and easily integrate it into agents like GPTs.</p>
-  <p>👉 We update quickly, please star.</p>
+  <p>Modified from: https://github.com/gcui-art/suno-api/</p>
 </div>
 <p align="center">
   <a target="_blank" href="./README.md">English</a> 
-  | <a target="_blank" href="./README_CN.md">简体中文</a> 
-  | <a target="_blank" href="./README_RU.md">русский</a> 
   | <a target="_blank" href="https://suno.gcui.ai">Demo</a> 
   | <a target="_blank" href="https://suno.gcui.ai/docs">Docs</a> 
-  | <a target="_blank" href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fgcui-art%2Fsuno-api&env=SUNO_COOKIE,TWOCAPTCHA_KEY,BROWSER,BROWSER_GHOST_CURSOR,BROWSER_LOCALE,BROWSER_HEADLESS&project-name=suno-api&repository-name=suno-api">Deploy with Vercel</a> 
+  | <a target="_blank" href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fgcui-art%2Fsuno-api&env=SUNO_COOKIE,BROWSER,BROWSER_GHOST_CURSOR,BROWSER_LOCALE,BROWSER_HEADLESS&project-name=suno-api&repository-name=suno-api">Deploy with Vercel</a> 
 </p>
 <p align="center">
   <a href="https://www.producthunt.com/products/gcui-art-suno-api-open-source-sunoai-api/reviews?utm_source=badge-product_review&utm_medium=badge&utm_souce=badge-gcui&#0045;art&#0045;suno&#0045;api&#0045;open&#0045;source&#0045;sunoai&#0045;api" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/product_review.svg?product_id=577408&theme=light" alt="gcui&#0045;art&#0047;suno&#0045;api&#0058;Open&#0045;source&#0032;SunoAI&#0032;API - Use&#0032;API&#0032;to&#0032;call&#0032;the&#0032;music&#0032;generation&#0032;AI&#0032;of&#0032;suno&#0046;ai&#0046; | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
@@ -27,7 +25,7 @@ Suno is an amazing AI music service. Although the official API is not yet availa
 
 We discovered that some users have similar needs, so we decided to open-source this project, hoping you'll like it.
 
-This implementation uses the paid [2Captcha](https://2captcha.com/about) service (a.k.a. ruCaptcha) to solve the hCaptcha challenges automatically and does not use any already made closed-source paid Suno API implementations.
+When an hCaptcha challenge is detected, suno-api automatically opens a browser, navigates to the Suno create page, fills in your lyrics and style, clicks Create, and waits 10 seconds for the captcha handshake to complete — then seamlessly resumes the normal API flow. No paid captcha-solving service required.
 
 ## Demo
 
@@ -38,12 +36,27 @@ We have deployed an example bound to a free Suno account, so it has daily usage 
 
 - Perfectly implements the creation API from suno.ai.
 - Automatically keep the account active.
-- Solve CAPTCHAs automatically using [2Captcha](https://2captcha.com) and [Playwright](https://playwright.dev) with [rebrowser-patches](https://github.com/rebrowser/rebrowser-patches).
-- Compatible with the format of OpenAI’s `/v1/chat/completions` API.
+- Handles hCaptcha automatically by opening a browser, submitting a real create request, and resuming the API flow — using [Playwright](https://playwright.dev) with [rebrowser-patches](https://github.com/rebrowser/rebrowser-patches).
+- Compatible with the format of OpenAI's `/v1/chat/completions` API.
 - Supports Custom Mode.
 - One-click deployment to [Vercel](#deploy-to-vercel) & [Docker](#docker).
 - In addition to the standard API, it also adapts to the API Schema of Agent platforms like GPTs and Coze, so you can use it as a tool/plugin/Action for LLMs and integrate it into any AI Agent.
 - Permissive open-source license, allowing you to freely integrate and modify.
+
+## How captcha handling works
+
+When suno-api receives an hCaptcha challenge during a generation request, it automatically:
+
+1. Make sure BROWSER_HEADLESS=false, else it does not work
+2. captcha will come after 5 - 10 requests
+3. Opens a Playwright-controlled browser and navigates to `suno.com/create`.
+4. Fills in your lyrics and style fields with the values from the original request.
+5. Clicks the **Create** button, triggering the real hCaptcha flow inside the browser session.
+6. Waits **10 seconds** for the captcha handshake and cookie refresh to complete.
+7. Closes the browser and resumes the original API request with the refreshed session cookies.
+
+This approach works without any external captcha-solving service. The browser interaction is what satisfies hCaptcha's behavioral signals.
+
 
 ## Getting Started
 
@@ -59,24 +72,13 @@ We have deployed an example bound to a free Suno account, so it has daily usage 
 
 ![get cookie](https://github.com/gcui-art/suno-api/blob/main/public/get-cookie-demo.gif)
 
-### 2. Register on 2Captcha and top up your balance
-[2Captcha](https://2captcha.com/about) is a paid CAPTCHA solving service that uses real workers to solve the CAPTCHA and has high accuracy. It is needed because of Suno constantly requesting hCaptcha solving that currently isn't possible for free by any means.
-
-[Create](https://2captcha.com/auth/register?userType=customer) a new 2Captcha account, [top up](https://2captcha.com/pay) your balance and [get your API key](https://2captcha.com/enterpage#recognition).
-
-> [!NOTE]
-> If you are located in Russia or Belarus, use the [ruCaptcha](https://rucaptcha.com) interface instead of 2Captcha. It's the same service, but it supports payments from those countries.
-
-> [!TIP]
-> If you want as few CAPTCHAs as possible, it is recommended to use a macOS system. macOS systems usually get fewer CAPTCHAs than Linux and Windows—this is due to its unpopularity in the web scraping industry. Running suno-api on Windows and Linux will work, but in some cases, you could get a pretty large number of CAPTCHAs.
-
-### 3. Clone and deploy this project
+### 2. Clone and deploy this project
 
 You can choose your preferred deployment method:
 
 #### Deploy to Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fgcui-art%2Fsuno-api&env=SUNO_COOKIE,TWOCAPTCHA_KEY,BROWSER,BROWSER_GHOST_CURSOR,BROWSER_LOCALE,BROWSER_HEADLESS&project-name=suno-api&repository-name=suno-api)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fgcui-art%2Fsuno-api&env=SUNO_COOKIE,BROWSER,BROWSER_GHOST_CURSOR,BROWSER_LOCALE,BROWSER_HEADLESS&project-name=suno-api&repository-name=suno-api)
 
 #### Run locally
 
@@ -95,30 +97,28 @@ Alternatively, you can use [Docker Compose](https://docs.docker.com/compose/). H
 docker compose build && docker compose up
 ```
 
-### 4. Configure suno-api
+### 3. Configure suno-api
 
 - If deployed to Vercel, please add the environment variables in the Vercel dashboard.
 
-- If you’re running this locally, be sure to add the following to your `.env` file:
+- If you're running this locally, be sure to add the following to your `.env` file:
 #### Environment variables
 - `SUNO_COOKIE` — the `Cookie` header you obtained in the first step.
-- `TWOCAPTCHA_KEY` — your 2Captcha API key from the second step.
-- `BROWSER` — the name of the browser that is going to be used to solve the CAPTCHA. Only `chromium` and `firefox` supported.
-- `BROWSER_GHOST_CURSOR` — use ghost-cursor-playwright to simulate smooth mouse movements. Please note that it doesn't seem to make any difference in the rate of CAPTCHAs, so you can set it to `false`. Retained for future testing.
-- `BROWSER_LOCALE` — the language of the browser. Using either `en` or `ru` is recommended, since those have the most workers on 2Captcha. [List of supported languages](https://2captcha.com/2captcha-api#language)
-- `BROWSER_HEADLESS` — run the browser without the window. You probably want to set this to `true`.
+- `BROWSER` — the browser used to handle captcha challenges. Only `chromium` and `firefox` are supported.
+- `BROWSER_GHOST_CURSOR` — use ghost-cursor-playwright to simulate smooth mouse movements. Does not significantly affect captcha frequency; set to `false` unless you want to test it.
+- `BROWSER_LOCALE` — the language of the browser. Using `en` is recommended.
+- `BROWSER_HEADLESS` — run the browser without a visible window. Set to `true` for server deployments. Set to `false` locally if you want to watch the browser interact with the create page during captcha handling.
 ```bash
 SUNO_COOKIE=<…>
-TWOCAPTCHA_KEY=<…>
 BROWSER=chromium
 BROWSER_GHOST_CURSOR=false
 BROWSER_LOCALE=en
 BROWSER_HEADLESS=true
 ```
 
-### 5. Run suno-api
+### 4. Run suno-api
 
-- If you’ve deployed to Vercel:
+- If you've deployed to Vercel:
   - Please click on Deploy in the Vercel dashboard and wait for the deployment to be successful.
   - Visit the `https://<vercel-assigned-domain>/api/get_limit` API for testing.
 - If running locally:
@@ -137,7 +137,7 @@ BROWSER_HEADLESS=true
 
 it means the program is running normally.
 
-### 6. Use Suno API
+### 5. Use Suno API
 
 You can check out the detailed API documentation at :
 [suno.gcui.ai/docs](https://suno.gcui.ai/docs)
@@ -148,10 +148,10 @@ Suno API currently mainly implements the following APIs:
 
 ```bash
 - `/api/generate`: Generate music
-- `/v1/chat/completions`: Generate music - Call the generate API in a format that works with OpenAI’s API.
+- `/v1/chat/completions`: Generate music - Call the generate API in a format that works with OpenAI's API.
 - `/api/custom_generate`: Generate music (Custom Mode, support setting lyrics, music style, title, etc.)
 - `/api/generate_lyrics`: Generate lyrics based on prompt
-- `/api/get`: Get music information based on the id. Use “,” to separate multiple ids.
+- `/api/get`: Get music information based on the id. Use "," to separate multiple ids.
     If no IDs are provided, all music will be returned.
 - `/api/get_limit`: Get quota Info
 - `/api/extend_audio`: Extend audio length
@@ -318,27 +318,6 @@ main();
 ## Integration with Custom Agents
 
 You can integrate Suno AI as a tool/plugin/action into your AI agent.
-
-### Integration with GPTs
-
-[coming soon...]
-
-### Integration with Coze
-
-[coming soon...]
-
-### Integration with LangChain
-
-[coming soon...]
-
-## Contributing
-
-There are four ways you can support this project:
-
-1. Fork and Submit Pull Requests: We welcome any PRs that enhance the functionality, APIs, response time and availability. You can also help us just by translating this README into your language—any help for this project is welcome!
-2. Open Issues: We appreciate reasonable suggestions and bug reports.
-3. Donate: If this project has helped you, consider buying us a coffee using the Sponsor button at the top of the project. Cheers! ☕
-4. Spread the Word: Recommend this project to others, star the repo, or add a backlink after using the project.
 
 ## Questions, Suggestions, Issues, or Bugs?
 

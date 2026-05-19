@@ -5,8 +5,6 @@ import yn from 'yn';
 import { isPage, sleep, waitForRequests } from '@/lib/utils';
 import * as cookie from 'cookie';
 import { randomUUID } from 'node:crypto';
-import { Solver } from '@2captcha/captcha-solver';
-import { paramsCoordinates } from '@2captcha/captcha-solver/dist/structs/2captcha';
 import { BrowserContext, Page, Locator, chromium, firefox } from 'rebrowser-playwright-core';
 import { createCursor, Cursor } from 'ghost-cursor-playwright';
 import { promises as fs } from 'fs';
@@ -18,7 +16,7 @@ const cache = globalForSunoApi.sunoApiCache || new Map<string, SunoApi>();
 globalForSunoApi.sunoApiCache = cache;
 
 const logger = pino();
-export const DEFAULT_MODEL = 'chirp-v3-5';
+export const DEFAULT_MODEL = 'chirp-fenix'; //'chirp-v3-5';
 
 export interface AudioInfo {
   id: string; // Unique identifier for the audio
@@ -78,7 +76,6 @@ class SunoApi {
   private deviceId?: string;
   private userAgent?: string;
   private cookies: Record<string, string | undefined>;
-  private solver = new Solver(process.env.TWOCAPTCHA_KEY + '');
   private ghostCursorEnabled = yn(process.env.BROWSER_GHOST_CURSOR, { default: false });
   private cursor?: Cursor;
 
@@ -126,25 +123,6 @@ class SunoApi {
     await this.keepAlive();
     return this;
   }
-
-  /**
-   * Get the clerk package latest version id.
-   * This method is commented because we are now using a hard-coded Clerk version, hence this method is not needed.
-   
-  private async getClerkLatestVersion() {
-    // URL to get clerk version ID
-    const getClerkVersionUrl = `${SunoApi.JSDELIVR_BASE_URL}/v1/package/npm/@clerk/clerk-js`;
-    // Get clerk version ID
-    const versionListResponse = await this.client.get(getClerkVersionUrl);
-    if (!versionListResponse?.data?.['tags']['latest']) {
-      throw new Error(
-        'Failed to get clerk version info, Please try again later'
-      );
-    }
-    // Save clerk version ID for auth
-    SunoApi.clerkVersion = versionListResponse?.data?.['tags']['latest'];
-  }
-  */
 
   /**
    * Get the session ID and save it for later use.
@@ -300,132 +278,68 @@ class SunoApi {
     return context;
   }
 
-  /**
-   * Checks for CAPTCHA verification and solves the CAPTCHA if needed
-   * @returns {string|null} hCaptcha token. If no verification is required, returns null
-   */
-  public async getCaptcha(): Promise<string|null> {
-    if (!await this.captchaRequired())
-      return null;
 
-    logger.info('CAPTCHA required. Launching browser...')
+  /**
+   * Opens a browser, fills in lyrics and style on the Suno create page, clicks create,
+   * captures the API response, waits 10 seconds, then returns the raw response data.
+   * Used as a captcha bypass when captchaRequired() returns true.
+   */
+  private async generateSongViaBrowser(prompt: string, tags?: string): Promise<any> {
+    logger.info('CAPTCHA required. Using browser to manually create song...');
     const browser = await this.launchBrowser();
     const page = await browser.newPage();
-    await page.goto('https://suno.com/create', { referer: 'https://www.google.com/', waitUntil: 'domcontentloaded', timeout: 0 });
+
+    await page.goto('https://suno.com/create', {
+      referer: 'https://www.google.com/',
+      waitUntil: 'domcontentloaded',
+      timeout: 0
+    });
 
     logger.info('Waiting for Suno interface to load');
-    // await page.locator('.react-aria-GridList').waitFor({ timeout: 60000 });
-    await page.waitForResponse('**/api/project/**\\?**', { timeout: 60000 }); // wait for song list API call
+    await page.waitForResponse('**/api/project/**\\?**', { timeout: 60000 });
 
     if (this.ghostCursorEnabled)
       this.cursor = await createCursor(page);
-    
-    logger.info('Triggering the CAPTCHA');
-    try {
-      await page.getByLabel('Close').click({ timeout: 2000 }); // close all popups
-      // await this.click(page, { x: 318, y: 13 });
-    } catch(e) {}
 
-    const textarea = page.locator('.custom-textarea');
-    await this.click(textarea);
-    await textarea.pressSequentially('Lorem ipsum', { delay: 80 });
+    // Switch to Advanced (custom) mode
+    const advancedTab = page.locator('button[role="tab"][aria-label="Advanced"]');
+    await advancedTab.waitFor({ timeout: 10000 });
+    await this.click(advancedTab);
 
-    const button = page.locator('button[aria-label="Create"]').locator('div.flex');
-    this.click(button);
+    // Fill lyrics textarea
+    const lyricsTextarea = page.locator('textarea[data-testid="lyrics-textarea"]');
+    await lyricsTextarea.waitFor({ timeout: 30000 });
+    await this.click(lyricsTextarea);
+    await lyricsTextarea.fill(prompt);
 
-    const controller = new AbortController();
-    new Promise<void>(async (resolve, reject) => {
-      const frame = page.frameLocator('iframe[title*="hCaptcha"]');
-      const challenge = frame.locator('.challenge-container');
-      try {
-        let wait = true;
-        while (true) {
-          if (wait)
-            await waitForRequests(page, controller.signal);
-          const drag = (await challenge.locator('.prompt-text').first().innerText()).toLowerCase().includes('drag');
-          let captcha: any;
-          for (let j = 0; j < 3; j++) { // try several times because sometimes 2Captcha could return an error
-            try {
-              logger.info('Sending the CAPTCHA to 2Captcha');
-              const payload: paramsCoordinates = {
-                body: (await challenge.screenshot({ timeout: 5000 })).toString('base64'),
-                lang: process.env.BROWSER_LOCALE
-              };
-              if (drag) {
-                // Say to the worker that he needs to click
-                payload.textinstructions = 'CLICK on the shapes at their edge or center as shown above—please be precise!';
-                payload.imginstructions = (await fs.readFile(path.join(process.cwd(), 'public', 'drag-instructions.jpg'))).toString('base64');
-              }
-              captcha = await this.solver.coordinates(payload);
-              break;
-            } catch(err: any) {
-              logger.info(err.message);
-              if (j != 2)
-                logger.info('Retrying...');
-              else
-                throw err;
-            }
-          } 
-          if (drag) {
-            const challengeBox = await challenge.boundingBox();
-            if (challengeBox == null)
-              throw new Error('.challenge-container boundingBox is null!');
-            if (captcha.data.length % 2) {
-              logger.info('Solution does not have even amount of points required for dragging. Requesting new solution...');
-              this.solver.badReport(captcha.id);
-              wait = false;
-              continue;
-            }
-            for (let i = 0; i < captcha.data.length; i += 2) {
-              const data1 = captcha.data[i];
-              const data2 = captcha.data[i+1];
-              logger.info(JSON.stringify(data1) + JSON.stringify(data2));
-              await page.mouse.move(challengeBox.x + +data1.x, challengeBox.y + +data1.y);
-              await page.mouse.down();
-              await sleep(1.1); // wait for the piece to be 'unlocked'
-              await page.mouse.move(challengeBox.x + +data2.x, challengeBox.y + +data2.y, { steps: 30 });
-              await page.mouse.up();
-            }
-            wait = true;
-          } else {
-            for (const data of captcha.data) {
-              logger.info(data);
-              await this.click(challenge, { x: +data.x, y: +data.y });
-            };
-          }
-          this.click(frame.locator('.button-submit')).catch(e => {
-            if (e.message.includes('viewport')) // when hCaptcha window has been closed due to inactivity,
-              this.click(button); // click the Create button again to trigger the CAPTCHA
-            else
-              throw e;
-          });
-        }
-      } catch(e: any) {
-        if (e.message.includes('been closed') // catch error when closing the browser
-          || e.message == 'AbortError') // catch error when waitForRequests is aborted
-          resolve();
-        else
-          reject(e);
-      }
-    }).catch(e => {
-      browser.browser()?.close();
-      throw e;
-    });
-    return (new Promise((resolve, reject) => {
-      page.route('**/api/generate/v2/**', async (route: any) => {
-        try {
-          logger.info('hCaptcha token received. Closing browser');
-          route.abort();
-          browser.browser()?.close();
-          controller.abort();
-          const request = route.request();
-          this.currentToken = request.headers().authorization.split('Bearer ').pop();
-          resolve(request.postDataJSON().token);
-        } catch(err) {
-          reject(err);
-        }
-      });
-    }));
+    // Fill style textarea if tags provided
+    if (tags) {
+      const styleTextarea = page.locator('[data-testid="create-form-styles-wrapper"] textarea');
+      await styleTextarea.waitFor({ timeout: 30000 });
+      await this.click(styleTextarea);
+      await styleTextarea.fill(tags);
+    }
+
+    // Set up intercept BEFORE clicking so we don't miss the response
+    const responsePromise = page.waitForResponse(
+      resp => resp.url().includes('/api/generate/v2-web/') && resp.request().method() === 'POST',
+      { timeout: 40000 }
+    );
+
+    // Click create button
+    const createButton = page.locator('button[aria-label="Create song"]');
+    await createButton.waitFor({ timeout: 30000 });
+    await this.click(createButton);
+
+    logger.info('Create button clicked. Waiting for API response...');
+    const apiResponse = await responsePromise;
+    const responseData = await apiResponse.json();
+
+    logger.info('Song creation submitted via browser. Waiting 10 seconds before returning to normal flow...');
+    await sleep(10);
+
+    await browser.browser()?.close();
+    return responseData;
   }
 
   /**
@@ -558,52 +472,61 @@ class SunoApi {
     continue_at?: number
   ): Promise<AudioInfo[]> {
     await this.keepAlive();
-    const payload: any = {
-      make_instrumental: make_instrumental,
-      mv: model || DEFAULT_MODEL,
-      prompt: '',
-      generation_type: 'TEXT',
-      continue_at: continue_at,
-      continue_clip_id: continue_clip_id,
-      task: task,
-      token: await this.getCaptcha()
-    };
-    if (isCustom) {
-      payload.tags = tags;
-      payload.title = title;
-      payload.negative_tags = negative_tags;
-      payload.prompt = prompt;
+    let clips: any[];
+
+    if (await this.captchaRequired()) {
+      const browserResult = await this.generateSongViaBrowser(prompt, tags);
+      clips = browserResult.clips;
     } else {
-      payload.gpt_description_prompt = prompt;
-    }
-    logger.info(
-      'generateSongs payload:\n' +
-        JSON.stringify(
-          {
-            prompt: prompt,
-            isCustom: isCustom,
-            tags: tags,
-            title: title,
-            make_instrumental: make_instrumental,
-            wait_audio: wait_audio,
-            negative_tags: negative_tags,
-            payload: payload
-          },
-          null,
-          2
-        )
-    );
-    const response = await this.client.post(
-      `${SunoApi.BASE_URL}/api/generate/v2/`,
-      payload,
-      {
-        timeout: 10000 // 10 seconds timeout
+      const payload: any = {
+        make_instrumental: make_instrumental,
+        mv: model || DEFAULT_MODEL,
+        prompt: '',
+        generation_type: 'TEXT',
+        continue_at: continue_at,
+        continue_clip_id: continue_clip_id,
+        task: task,
+        token: null
+      };
+      if (isCustom) {
+        payload.tags = tags;
+        payload.title = title;
+        payload.negative_tags = negative_tags;
+        payload.prompt = prompt;
+      } else {
+        payload.gpt_description_prompt = prompt;
       }
-    );
-    if (response.status !== 200) {
-      throw new Error('Error response:' + response.statusText);
+      logger.info(
+        'generateSongs payload:\n' +
+          JSON.stringify(
+            {
+              prompt: prompt,
+              isCustom: isCustom,
+              tags: tags,
+              title: title,
+              make_instrumental: make_instrumental,
+              wait_audio: wait_audio,
+              negative_tags: negative_tags,
+              payload: payload
+            },
+            null,
+            2
+          )
+      );
+      const response = await this.client.post(
+        `${SunoApi.BASE_URL}/api/generate/v2-web/`,
+        payload,
+        {
+          timeout: 10000 // 10 seconds timeout
+        }
+      );
+      if (response.status !== 200) {
+        throw new Error('Error response:' + response.statusText);
+      }
+      clips = response.data.clips;
     }
-    const songIds = response.data.clips.map((audio: any) => audio.id);
+
+    const songIds = clips.map((audio: any) => audio.id);
     //Want to wait for music file generation
     if (wait_audio) {
       const startTime = Date.now();
@@ -624,7 +547,7 @@ class SunoApi {
       }
       return lastResponse;
     } else {
-      return response.data.clips.map((audio: any) => ({
+      return clips.map((audio: any) => ({
         id: audio.id,
         title: audio.title,
         image_url: audio.image_url,
