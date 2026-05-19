@@ -3,7 +3,7 @@
       Suno AI API
   </h1>
   <p>Use API to call the music generation AI of Suno.ai and easily integrate it into agents like GPTs.</p>
-  <p>Modified from: https://github.com/gcui-art/suno-api/</p>
+  <p>Modified from: https://github.com/gcui-art/suno-api/, made captcha working in another way, without external solvers. All credits go to the origional creator. </p>
 </div>
 <p align="center">
   <a target="_blank" href="./README.md">English</a> 
@@ -11,11 +11,6 @@
   | <a target="_blank" href="https://suno.gcui.ai/docs">Docs</a> 
   | <a target="_blank" href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fgcui-art%2Fsuno-api&env=SUNO_COOKIE,BROWSER,BROWSER_GHOST_CURSOR,BROWSER_LOCALE,BROWSER_HEADLESS&project-name=suno-api&repository-name=suno-api">Deploy with Vercel</a> 
 </p>
-<p align="center">
-  <a href="https://www.producthunt.com/products/gcui-art-suno-api-open-source-sunoai-api/reviews?utm_source=badge-product_review&utm_medium=badge&utm_souce=badge-gcui&#0045;art&#0045;suno&#0045;api&#0045;open&#0045;source&#0045;sunoai&#0045;api" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/product_review.svg?product_id=577408&theme=light" alt="gcui&#0045;art&#0047;suno&#0045;api&#0058;Open&#0045;source&#0032;SunoAI&#0032;API - Use&#0032;API&#0032;to&#0032;call&#0032;the&#0032;music&#0032;generation&#0032;AI&#0032;of&#0032;suno&#0046;ai&#0046; | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
-</p>
-
-> 🔥 Check out my new project: [Linkly-ai-cli: A document search engine CLI, built for AI Agents.](https://github.com/LinklyAI/linkly-ai-cli)
 
 ![suno-api banner](https://github.com/gcui-art/suno-api/blob/main/public/suno-banner.png)
 
@@ -325,7 +320,7 @@ We use [GitHub Issues](https://github.com/gcui-art/suno-api/issues) to manage fe
 
 ## License
 
-The license of this project is LGPL-3.0 or later. See [LICENSE](LICENSE) for more information.
+The license of this project is LGPL-3.0 or later. See [LICENSE](LICENSE) for more information. Forked from: https://github.com/gcui-art/suno-api
 
 ## Related Links
 
