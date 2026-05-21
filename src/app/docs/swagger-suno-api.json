@@ -589,6 +589,212 @@
         }
       }
     },
+    "/api/feed": {
+      "post": {
+        "summary": "Get user feed (library)",
+        "description": "Retrieves the user's audio feed (library). Supports pagination via a cursor and optional filters for liked or trashed items.",
+        "tags": ["default"],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "nextCursorId": {
+                    "type": "string",
+                    "description": "Cursor ID for pagination. Leave empty or null to get the first page.",
+                    "example": null
+                  },
+                  "liked": {
+                    "type": "boolean",
+                    "description": "Filter to only return liked items.",
+                    "example": false
+                  },
+                  "trashed": {
+                    "type": "boolean",
+                    "description": "Filter to only return trashed items.",
+                    "example": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "clips": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "status": { "type": "string", "description": "e.g. complete, streaming" },
+                          "title": { "type": "string" },
+                          "play_count": { "type": "integer" },
+                          "upvote_count": { "type": "integer" },
+                          "comment_count": { "type": "integer" },
+                          "flag_count": { "type": "integer" },
+                          "allow_comments": { "type": "boolean" },
+                          "is_verified": { "type": "boolean" },
+                          "entity_type": { "type": "string" },
+                          "audio_url": { "type": "string" },
+                          "video_url": { "type": "string" },
+                          "media_urls": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "url": { "type": "string" },
+                                "content_type": { "type": "string" },
+                                "delivery": { "type": "string" },
+                                "encoding": { "type": "string" }
+                              }
+                            }
+                          },
+                          "image_url": { "type": "string" },
+                          "image_large_url": { "type": "string" },
+                          "major_model_version": { "type": "string" },
+                          "model_name": { "type": "string" },
+                          "metadata": {
+                            "type": "object",
+                            "properties": {
+                              "tags": { "type": "string" },
+                              "prompt": { "type": "string" },
+                              "type": { "type": "string" },
+                              "duration": { "type": "number" },
+                              "refund_credits": { "type": "boolean" },
+                              "stream": { "type": "boolean" },
+                              "make_instrumental": { "type": "boolean" },
+                              "can_remix": { "type": "boolean" },
+                              "is_remix": { "type": "boolean" },
+                              "priority": { "type": "integer" },
+                              "has_stem": { "type": "boolean" },
+                              "max_bpm": { "type": "number" },
+                              "min_bpm": { "type": "number" },
+                              "avg_bpm": { "type": "number" },
+                              "uses_latest_model": { "type": "boolean" },
+                              "is_mumble": { "type": "boolean" },
+                              "model_badges": { "type": "object" }
+                            }
+                          },
+                          "is_liked": { "type": "boolean" },
+                          "user_id": { "type": "string" },
+                          "display_name": { "type": "string" },
+                          "handle": { "type": "string" },
+                          "is_handle_updated": { "type": "boolean" },
+                          "avatar_image_url": { "type": "string" },
+                          "is_trashed": { "type": "boolean" },
+                          "is_hidden": { "type": "boolean" },
+                          "created_at": { "type": "string", "format": "date-time" },
+                          "is_public": { "type": "boolean" },
+                          "reaction": {
+                            "type": "object",
+                            "properties": {
+                              "play_count": { "type": "integer" },
+                              "skip_count": { "type": "integer" },
+                              "flagged": { "type": "boolean" },
+                              "reaction_type": { "type": "string" },
+                              "clip": { "type": "string" },
+                              "updated_at": { "type": "string", "format": "date-time" }
+                            }
+                          },
+                          "is_persona_root": { "type": "boolean" },
+                          "ownership": {
+                            "type": "object",
+                            "properties": {
+                              "ownership_reason": { "type": "string" }
+                            }
+                          },
+                          "explicit": { "type": "boolean" },
+                          "display_tags": { "type": "string" },
+                          "is_contest_clip": { "type": "boolean" },
+                          "has_hook": { "type": "boolean" },
+                          "batch_index": { "type": "integer" },
+                          "action_config": {
+                            "type": "object",
+                            "properties": {
+                              "actions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "action_type": { "type": "string" },
+                                    "disabled": { "type": "boolean" },
+                                    "visible": { "type": "boolean" }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Cursor to pass as nextCursorId for the next page.",
+                      "example": "7551f7e9-7412-4b0c-9477-74c55bc0a4b7"
+                    },
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether more pages are available.",
+                      "example": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Payment required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string", "example": "Payment required" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Network error / unable to reach Suno API",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Network error: Unable to connect to Suno API. Please check your internet connection and try again."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string", "example": "Internal error: Unknown error occurred" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/persona": {
       "get": {
         "summary": "Get persona information and clips.",

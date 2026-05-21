@@ -148,6 +148,7 @@ Suno API currently mainly implements the following APIs:
 - `/api/generate_lyrics`: Generate lyrics based on prompt
 - `/api/get`: Get music information based on the id. Use "," to separate multiple ids.
     If no IDs are provided, all music will be returned.
+- `/api/feed`: Get music feed list, liked or disliked clips
 - `/api/get_limit`: Get quota Info
 - `/api/extend_audio`: Extend audio length
 - `/api/generate_stems`: Make stem tracks (separate audio and music track)

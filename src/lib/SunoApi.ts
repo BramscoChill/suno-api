@@ -93,6 +93,7 @@ class SunoApi {
         'sec-ch-ua': '"Chromium";v="130", "Android WebView";v="130", "Not?A_Brand";v="99"',
         'sec-ch-ua-mobile': '?1',
         'sec-ch-ua-platform': '"Android"',
+        'browser-token': `{"token":"${Buffer.from(JSON.stringify({ timestamp: Date.now() })).toString('base64')}"}`,
         'User-Agent': this.userAgent
       }
     });
@@ -737,6 +738,39 @@ class SunoApi {
     const response = await this.client.get(
       `${SunoApi.BASE_URL}/api/clip/${clipId}`
     );
+    return response.data;
+  }
+
+
+  public async getFeed(nextCursorId: string | null, liked: boolean | false, trashed: boolean | false): Promise<object> {
+    await this.keepAlive(false);
+
+    const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+
+    const payload: any = {
+      cursor: !!nextCursorId ? nextCursorId : null,
+      limit: 20,
+      filters: {
+        liked: liked != null ? capitalize(String(liked)) : "False",
+        trashed: trashed != null ? capitalize(String(trashed)) : "False",
+        fromStudioProject: { presence: "False" },
+        stem: { presence: "False" },
+        workspace: { presence: "True", workspaceId: "default" }
+      }
+    };
+
+      const response = await this.client.post(
+        `${SunoApi.BASE_URL}/api/feed/v3`,
+        payload,
+        {
+          timeout: 10000 // 10 seconds timeout
+        }
+      );
+      if (response.status !== 200) {
+        throw new Error('Error response:' + response.statusText);
+      }
+
     return response.data;
   }
 
