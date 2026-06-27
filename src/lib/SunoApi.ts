@@ -303,7 +303,7 @@ class SunoApi {
       this.cursor = await createCursor(page);
 
     // Switch to Advanced (custom) mode
-    const advancedTab = page.locator('button[role="tab"][aria-label="Advanced"]');
+    const advancedTab = page.locator('span[role="tablist"] button[role="tab"] span:has-text("Advanced")');
     await advancedTab.waitFor({ timeout: 10000 });
     await this.click(advancedTab);
 
@@ -660,6 +660,26 @@ class SunoApi {
       success: transcribedWord.success,
       p_align: transcribedWord.p_align
     }));
+  }
+
+  /**
+   * Get the WAV file download info for a song.
+   * @param song_id The ID of the song to get the WAV file for.
+   * @returns A promise that resolves to the WAV file response data.
+   */
+  public async getWavFile(song_id: string): Promise<any> {
+    await this.keepAlive(false);
+    await this.client.post(`${SunoApi.BASE_URL}/api/gen/${song_id}/convert_wav/`, null, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const delayMs = 2000 + Math.random() * 3000;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    const response = await this.client.get(`${SunoApi.BASE_URL}/api/gen/${song_id}/wav_file/`);
+
+    console.log(`getWavFile ~ response:`, response.data);
+    return response.data;
   }
 
   /**
