@@ -308,17 +308,25 @@ class SunoApi {
     await this.click(advancedTab);
 
     // Fill lyrics textarea
-    const lyricsTextarea = page.locator('textarea[data-testid="lyrics-textarea"]');
+    const lyricsTextarea = page.locator('div[role="textbox"][class="lyrics-editor-content"]');
+
     await lyricsTextarea.waitFor({ timeout: 30000 });
     await this.click(lyricsTextarea);
-    await lyricsTextarea.fill(prompt);
+    await page.keyboard.type(
+      prompt,
+      { delay: 100 } // adjust to taste — 100-500ms is "visibly slow"
+    );
 
     // Fill style textarea if tags provided
     if (tags) {
       const styleTextarea = page.locator('[data-testid="create-form-styles-wrapper"] textarea');
       await styleTextarea.waitFor({ timeout: 30000 });
       await this.click(styleTextarea);
-      await styleTextarea.fill(tags);
+      await page.keyboard.type(
+        tags,
+        { delay: 100 } // adjust to taste — 100-500ms is "visibly slow"
+      );
+      //await styleTextarea.fill(tags);
     }
 
     // Set up intercept BEFORE clicking so we don't miss the response
@@ -669,11 +677,28 @@ class SunoApi {
    */
   public async getWavFile(song_id: string): Promise<any> {
     await this.keepAlive(false);
+    
+    await this.client.post(
+      `${SunoApi.BASE_URL}/api/gen/${song_id}/increment_play_count/v2`,
+      { sample_factor: 1 },
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+    
+    let delayMs = 1000 + Math.random() * 1000;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    await this.client.post(`${SunoApi.BASE_URL}/api/gen/${song_id}/downbeats_streaming/v2`, null, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    delayMs = 1000 + Math.random() * 1000;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
     await this.client.post(`${SunoApi.BASE_URL}/api/gen/${song_id}/convert_wav/`, null, {
       headers: { 'Content-Type': 'application/json' },
     });
 
-    const delayMs = 2000 + Math.random() * 3000;
+    delayMs = 2000 + Math.random() * 3000;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 
     const response = await this.client.get(`${SunoApi.BASE_URL}/api/gen/${song_id}/wav_file/`);
