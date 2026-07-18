@@ -183,11 +183,32 @@ class SunoApi {
   }
 
   private async captchaRequired(): Promise<boolean> {
-    const resp = await this.client.post(`${SunoApi.BASE_URL}/api/c/check`, {
-      ctype: 'generation'
-    });
-    logger.info(resp.data);
-    return resp.data.required;
+    // Suno's edge (Cloudflare) intermittently resets the connection on this
+    // endpoint (ECONNRESET), so retry a few times with backoff. If the check
+    // ultimately fails, assume a captcha IS required and let the captcha flow
+    // handle it rather than aborting the whole request.
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const resp = await this.client.post(`${SunoApi.BASE_URL}/api/c/check`, {
+          ctype: 'generation'
+        });
+        logger.info(resp.data);
+        return resp.data.required;
+      } catch (error: any) {
+        if (attempt === maxAttempts) {
+          logger.warn(
+            `captcha check failed (${error?.code ?? error?.message}); assuming a captcha is required`
+          );
+          return true;
+        }
+        logger.warn(
+          `captcha check failed with ${error?.code ?? error?.message} (attempt ${attempt}/${maxAttempts}), retrying...`
+        );
+        await sleep(1, 3);
+      }
+    }
+    return true;
   }
 
   /**
@@ -297,20 +318,25 @@ class SunoApi {
     });
 
     logger.info('Waiting for Suno interface to load');
-    await page.waitForResponse('**/api/project/**\\?**', { timeout: 60000 });
+    // More robust than waiting on a specific API glob: wait for the create form itself.
+    const tablist = page.locator('span[role="tablist"]');
+    await tablist.waitFor({ state: 'visible', timeout: 60000 });
 
     if (this.ghostCursorEnabled)
       this.cursor = await createCursor(page);
 
-    // Switch to Advanced (custom) mode
-    const advancedTab = page.locator('span[role="tablist"] button[role="tab"] span:has-text("Advanced")');
+    // Switch to Advanced (custom) mode — target the button by aria-label, and only
+    // click if it isn't already the active tab.
+    const advancedTab = page.locator('button[role="tab"][aria-label="Advanced"]');
     await advancedTab.waitFor({ timeout: 10000 });
-    await this.click(advancedTab);
+    if ((await advancedTab.getAttribute('aria-selected')) !== 'true') {
+      await this.click(advancedTab);
+    }
 
-    // Fill lyrics textarea
-    const lyricsTextarea = page.locator('div[role="textbox"][class="lyrics-editor-content"]');
-
-    await lyricsTextarea.waitFor({ timeout: 30000 });
+    // Fill lyrics — the element has extra classes, so match on role + aria-label
+    // instead of an exact class string (which was the original bug).
+    const lyricsTextarea = page.locator('div[role="textbox"][aria-label="Lyrics editor"]');
+    await lyricsTextarea.waitFor({ state: 'visible', timeout: 30000 });
     await this.click(lyricsTextarea);
     await page.keyboard.type(
       prompt,
@@ -320,13 +346,12 @@ class SunoApi {
     // Fill style textarea if tags provided
     if (tags) {
       const styleTextarea = page.locator('[data-testid="create-form-styles-wrapper"] textarea');
-      await styleTextarea.waitFor({ timeout: 30000 });
+      await styleTextarea.waitFor({ state: 'visible', timeout: 30000 });
       await this.click(styleTextarea);
       await page.keyboard.type(
         tags,
-        { delay: 100 } // adjust to taste — 100-500ms is "visibly slow"
+        { delay: 100 }
       );
-      //await styleTextarea.fill(tags);
     }
 
     // Set up intercept BEFORE clicking so we don't miss the response
@@ -335,9 +360,17 @@ class SunoApi {
       { timeout: 40000 }
     );
 
-    // Click create button
+    // Create button starts out disabled="" until the lyrics register.
+    // Wait for the disabled attribute to be removed before clicking.
     const createButton = page.locator('button[aria-label="Create song"]');
     await createButton.waitFor({ timeout: 30000 });
+    await page.waitForFunction(
+      () => {
+        const btn = document.querySelector('button[aria-label="Create song"]');
+        return !!btn && !btn.hasAttribute('disabled');
+      },
+      { timeout: 15000 }
+    );
     await this.click(createButton);
 
     logger.info('Create button clicked. Waiting for API response...');
