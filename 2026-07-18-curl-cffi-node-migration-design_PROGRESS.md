@@ -2,7 +2,8 @@
 
 Spec: `docs/superpowers/specs/2026-07-18-curl-cffi-node-migration-design.md`
 
-## Status: DONE — migration complete, built, live-verified, committed locally on `main`.
+## Status: DONE — migration complete, built, live-verified, committed locally on `main`
+Commit: `ffb9c81` "Migrate SunoApi.ts HTTP transport from axios to curl-cffi-node" (local only, not pushed).
 
 ## What's left / needs your review
 - Nothing blocking. One thing worth a glance next time you're at the keyboard: `next.config.mjs` now has
