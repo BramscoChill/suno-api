@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import { CurlSession } from 'curl-cffi';
 import UserAgent from 'user-agents';
 import pino from 'pino';
 import yn from 'yn';
@@ -70,7 +70,7 @@ class SunoApi {
   private static CLERK_BASE_URL: string = 'https://auth.suno.com';
   private static CLERK_VERSION = '5.117.0';
 
-  private readonly client: AxiosInstance;
+  private readonly client: CurlSession;
   private sid?: string;
   private currentToken?: string;
   private deviceId?: string;
@@ -83,8 +83,11 @@ class SunoApi {
     this.userAgent = new UserAgent(/Macintosh/).random().toString(); // Usually Mac systems get less amount of CAPTCHAs
     this.cookies = cookie.parse(cookies);
     this.deviceId = this.cookies.ajs_anonymous_id || randomUUID();
-    this.client = axios.create({
-      withCredentials: true,
+    this.client = new CurlSession({
+      // Android Chrome profile closest to the `sec-ch-ua` version claimed below (v130); see
+      // CURL_IMPERSONATE_CHROME in curl-cffi's installed types for the full profile union.
+      impersonate: 'chrome131_android',
+      defaultHeaders: false,
       headers: {
         'Affiliate-Id': 'undefined',
         'Device-Id': `"${this.deviceId}"`,
@@ -97,25 +100,31 @@ class SunoApi {
         'User-Agent': this.userAgent
       }
     });
-    this.client.interceptors.request.use(config => {
-      if (this.currentToken && !config.headers.Authorization)
-        config.headers.Authorization = `Bearer ${this.currentToken}`;
-      const cookiesArray = Object.entries(this.cookies).map(([key, value]) => 
-        cookie.serialize(key, value as string)
+    // Raw `Cookie:` header strings carry no domain/path attributes, so seed the jar with an
+    // explicit `Domain=.suno.com` for every known cookie. This reproduces the old behavior of
+    // resending every cookie to every Suno host (studio-api.prod.suno.com, auth.suno.com)
+    // instead of letting them become host-only for whichever domain sees them first.
+    for (const [key, value] of Object.entries(this.cookies)) {
+      if (value === undefined) continue;
+      this.client.jar?.setCookieSync(
+        `${cookie.serialize(key, value)}; Domain=.suno.com; Path=/`,
+        'https://suno.com/'
       );
-      config.headers.Cookie = cookiesArray.join('; ');
-      return config;
+    }
+    this.client.onRequest(opts => {
+      if (this.currentToken && !opts.headers?.Authorization) {
+        opts.headers = { ...opts.headers, Authorization: `Bearer ${this.currentToken}` };
+      }
+      return opts;
     });
-    this.client.interceptors.response.use(resp => {
-      const setCookieHeader = resp.headers['set-cookie'];
-      if (Array.isArray(setCookieHeader)) {
-        const newCookies = cookie.parse(setCookieHeader.join('; '));
-        for (const [key, value] of Object.entries(newCookies)) {
-          this.cookies[key] = value;
-        }
+    // curl-cffi-node never rejects for HTTP error statuses (only transport-level failures), so
+    // this is the single choke point reproducing axios's default validateStatus throw-on-error.
+    this.client.onResponse(resp => {
+      if (resp.status < 200 || resp.status >= 300) {
+        throw new Error(`Request failed with status code ${resp.status}`);
       }
       return resp;
-    })
+    });
   }
 
   public async init(): Promise<SunoApi> {
@@ -134,7 +143,7 @@ class SunoApi {
     const getSessionUrl = `${SunoApi.CLERK_BASE_URL}/v1/client?__clerk_api_version=2025-11-10&_clerk_js_version=${SunoApi.CLERK_VERSION}`;
     // Get session ID
     const sessionResponse = await this.client.get(getSessionUrl, {
-      headers: { Authorization: this.cookies.__client }
+      headers: { Authorization: this.cookies.__client! }
     });
     if (!sessionResponse?.data?.response?.last_active_session_id) {
       throw new Error(
@@ -158,7 +167,7 @@ class SunoApi {
     // Renew session token
     logger.info('KeepAlive...\n');
     const renewResponse = await this.client.post(renewUrl, {}, {
-      headers: { Authorization: this.cookies.__client }
+      headers: { Authorization: this.cookies.__client! }
     });
     if (isWait) {
       await sleep(1, 2);
@@ -441,9 +450,6 @@ class SunoApi {
         timeout: 10000 // 10 seconds timeout
       }
     );
-    if (response.status !== 200) {
-      throw new Error('Error response:' + response.statusText);
-    }
     return response.data;
   }
 
@@ -562,9 +568,6 @@ class SunoApi {
           timeout: 10000 // 10 seconds timeout
         }
       );
-      if (response.status !== 200) {
-        throw new Error('Error response:' + response.statusText);
-      }
       clips = response.data.clips;
     }
 
@@ -720,14 +723,14 @@ class SunoApi {
     let delayMs = 1000 + Math.random() * 1000;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 
-    await this.client.post(`${SunoApi.BASE_URL}/api/gen/${song_id}/downbeats_streaming/v2`, null, {
+    await this.client.post(`${SunoApi.BASE_URL}/api/gen/${song_id}/downbeats_streaming/v2`, undefined, {
       headers: { 'Content-Type': 'application/json' },
     });
 
     delayMs = 1000 + Math.random() * 1000;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 
-    await this.client.post(`${SunoApi.BASE_URL}/api/gen/${song_id}/convert_wav/`, null, {
+    await this.client.post(`${SunoApi.BASE_URL}/api/gen/${song_id}/convert_wav/`, undefined, {
       headers: { 'Content-Type': 'application/json' },
     });
 
@@ -845,9 +848,6 @@ class SunoApi {
           timeout: 10000 // 10 seconds timeout
         }
       );
-      if (response.status !== 200) {
-        throw new Error('Error response:' + response.statusText);
-      }
 
     return response.data;
   }
@@ -875,10 +875,6 @@ class SunoApi {
     const response = await this.client.get(url, {
       timeout: 10000 // 10 seconds timeout
     });
-
-    if (response.status !== 200) {
-      throw new Error('Error response: ' + response.statusText);
-    }
 
     return response.data;
   }
