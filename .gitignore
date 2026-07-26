@@ -32,8 +32,18 @@ yarn-error.log*
 # vercel
 .vercel
 
+# CloakBrowser persistent profile (BROWSER_PROFILE_DIR). Never commit it: it holds the live Suno
+# session cookies, the Cloudflare bot-management cookies, and the cookie-consent choice.
+/input/browser-profile/
+
+# Co-drive session channel (docs/fingerprint-tools/codrive.mjs): commands, results, screenshots and
+# the event log. Per-session scratch, and the screenshots can contain a logged-in Suno account.
+/.codrive/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
 
 .idea
+/docs/
+/_backup_/

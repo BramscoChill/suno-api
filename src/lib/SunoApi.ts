@@ -1,12 +1,10 @@
 import { CurlSession } from 'curl-cffi';
-import UserAgent from 'user-agents';
 import pino from 'pino';
 import yn from 'yn';
-import { isPage, sleep, waitForRequests } from '@/lib/utils';
+import { sleep } from '@/lib/utils';
 import * as cookie from 'cookie';
 import { randomUUID } from 'node:crypto';
-import { BrowserContext, Page, Locator, chromium, firefox } from 'rebrowser-playwright-core';
-import { createCursor, Cursor } from 'ghost-cursor-playwright';
+import { generateSongViaBrowser } from '@/lib/CaptchaBrowser';
 import { promises as fs } from 'fs';
 import path from 'node:path';
 
@@ -69,6 +67,78 @@ class SunoApi {
   private static BASE_URL: string = 'https://studio-api.prod.suno.com';
   private static CLERK_BASE_URL: string = 'https://auth.suno.com';
   private static CLERK_VERSION = '5.117.0';
+  /**
+   * Browser identity for the HTTP transport, pinned to **146** so it agrees with the `chrome146`
+   * TLS profile used below. Derived from a real Brave / Windows session on suno.com, with the
+   * version numbers moved 150 -> 146; Brave is Chromium, so its UA reports `Chrome/<n>.0.0.0` and
+   * its TLS fingerprint is Chrome's.
+   *
+   * NOTE: this no longer matches the captcha browser. CloakBrowser ships a newer Chromium (150 on
+   * a registered licence) and reports its own real UA, while curl-cffi 0.1.50 has no `chrome150`
+   * TLS profile. Pinning this string forward without a matching profile would make the UA and the
+   * JA3 fingerprint disagree *within the same connection*, which is a stronger signal than the
+   * API and browser paths differing — so the pair stays at 146. `CaptchaBrowser` logs the split
+   * on every browser run (see `checkUserAgentDrift`), and `CLOAKBROWSER_VERSION` can pin the
+   * binary back to 146 if exact parity is ever wanted.
+   */
+  private static USER_AGENT =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
+
+  /**
+   * Canonical HTTP/2 header order for a Chromium `fetch()`/XHR, measured from a real Chromium
+   * against a local h2 server (see `docs/suno_api_FINGERPRINT_MATCHING_GUIDE.md` §4). Header
+   * order is itself a fingerprint, and curl emits our headers in object-literal order, so the
+   * outgoing set is re-sorted into this order on every request.
+   *
+   * `'*'` is the slot where Chrome emits headers supplied by the caller of `fetch()` — measured:
+   * a fetch-supplied `content-type` lands between `sec-ch-ua` and `sec-ch-ua-mobile`. Suno's own
+   * app headers plus `Authorization` are exactly that kind of header, so they go there too.
+   *
+   * `cookie` is absent on purpose: libcurl generates it from the cookie jar and controls its
+   * position itself (Chrome emits it between `accept-encoding` and `priority`).
+   */
+  private static readonly HEADER_ORDER = [
+    'sec-ch-ua-platform',
+    'user-agent',
+    'sec-ch-ua',
+    '*',
+    'accept-language',
+    'sec-ch-ua-mobile',
+    'accept',
+    'origin',
+    'sec-fetch-site',
+    'sec-fetch-mode',
+    'sec-fetch-dest',
+    'sec-gpc',
+    'referer',
+    'accept-encoding',
+    'priority'
+  ];
+
+  /** Rebuild a header map in `HEADER_ORDER`. Keys are lower-cased, which is what goes over the
+   *  wire on HTTP/2 anyway. Unknown headers fall into the `'*'` (author-supplied) slot. */
+  private static orderHeaders(headers: Record<string, string>): Record<string, string> {
+    const remaining = new Map(
+      Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v] as const)
+    );
+    const ordered: Record<string, string> = {};
+    for (const slot of SunoApi.HEADER_ORDER) {
+      if (slot === '*') {
+        for (const [key, value] of Array.from(remaining)) {
+          if (SunoApi.HEADER_ORDER.includes(key)) continue;
+          ordered[key] = value;
+          remaining.delete(key);
+        }
+        continue;
+      }
+      if (remaining.has(slot)) {
+        ordered[slot] = remaining.get(slot)!;
+        remaining.delete(slot);
+      }
+    }
+    for (const [key, value] of remaining) ordered[key] = value;
+    return ordered;
+  }
 
   private readonly client: CurlSession;
   private sid?: string;
@@ -76,29 +146,61 @@ class SunoApi {
   private deviceId?: string;
   private userAgent?: string;
   private cookies: Record<string, string | undefined>;
-  private ghostCursorEnabled = yn(process.env.BROWSER_GHOST_CURSOR, { default: false });
-  private cursor?: Cursor;
 
   constructor(cookies: string) {
-    this.userAgent = new UserAgent(/Macintosh/).random().toString(); // Usually Mac systems get less amount of CAPTCHAs
+    this.userAgent = SunoApi.USER_AGENT;
     this.cookies = cookie.parse(cookies);
     this.deviceId = this.cookies.ajs_anonymous_id || randomUUID();
     this.client = new CurlSession({
-      // Android Chrome profile closest to the `sec-ch-ua` version claimed below (v130); see
-      // CURL_IMPERSONATE_CHROME in curl-cffi's installed types for the full profile union.
-      impersonate: 'chrome131_android',
+      // Brave is Chromium-based, so its TLS/HTTP2 fingerprint is Chrome's. curl-cffi 0.1.50 has
+      // no chrome150 profile — `chrome146` is the newest desktop Chrome in the installed
+      // CURL_IMPERSONATE_CHROME union, and every version number in the headers below is pinned to
+      // 146 to match it. See docs/suno_api_FINGERPRINT_MATCHING_GUIDE.md for how to build a real
+      // chrome150 target.
+      impersonate: 'chrome146',
+      // Suppress the profile's own canned header set (it describes a top-level *navigation*:
+      // `sec-fetch-mode: navigate`, `accept: text/html,...`). Every header below is sent verbatim
+      // instead, shaped like the XHR/fetch requests the Suno web client actually makes.
       defaultHeaders: false,
-      headers: {
-        'Affiliate-Id': 'undefined',
-        'Device-Id': `"${this.deviceId}"`,
-        'x-suno-client': 'Android prerelease-4nt180t 1.0.42',
-        'X-Requested-With': 'com.suno.android',
-        'sec-ch-ua': '"Chromium";v="130", "Android WebView";v="130", "Not?A_Brand";v="99"',
-        'sec-ch-ua-mobile': '?1',
-        'sec-ch-ua-platform': '"Android"',
-        'browser-token': `{"token":"${Buffer.from(JSON.stringify({ timestamp: Date.now() })).toString('base64')}"}`,
-        'User-Agent': this.userAgent
-      }
+      // Order here is documentation only — `orderHeaders` re-sorts on every request (see the
+      // interceptor below), because per-request headers would otherwise be appended at the end.
+      headers: SunoApi.orderHeaders({
+        // --- browser identity, from a real Brave / Windows request to suno.com, pinned to v146 ---
+        'sec-ch-ua-platform': '"Windows"',
+        'user-agent': this.userAgent,
+        'sec-ch-ua': '"Not;A=Brand";v="8", "Chromium";v="146", "Brave";v="146"',
+        // DO NOT "correct" this to Chromium's `en-GB,en-US;q=0.9,en;q=0.8` ladder. This value was
+        // captured from the operator's real Brave (see the provenance on this block): Brave reduces
+        // Accept-Language as a fingerprinting defence and emits a two-entry `q=0.5` ladder where
+        // stock Chromium emits a descending three-entry one. Measured for contrast in
+        // docs/fingerprint-tools/verify-locale-header.mjs — `--lang=en-GB` on the captcha browser
+        // gives `en-GB,en-US;q=0.9,en;q=0.8`. So the two paths legitimately differ in ladder while
+        // agreeing on the primary tag (en-GB), which is the part a coarse correlation keys on; see
+        // §3.6 of the technical reference. Re-capture with docs/fingerprint-tools/brave-capture.js
+        // if the provenance is ever in doubt.
+        'accept-language': 'en-GB,en;q=0.5',
+        'sec-ch-ua-mobile': '?0',
+        accept: '*/*',
+        origin: 'https://suno.com',
+        // Both API hosts (auth.suno.com, studio-api.prod.suno.com) are same-site w.r.t. suno.com.
+        'sec-fetch-site': 'same-site',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-dest': 'empty',
+        'sec-gpc': '1',
+        referer: 'https://suno.com/',
+        // Must be listed explicitly to land in Chrome's position — libcurl otherwise emits its
+        // own `accept-encoding` first, ahead of every custom header. The `acceptEncoding` request
+        // option is deliberately left at its default ("gzip, deflate, br, zstd", identical to the
+        // real browser) because that option, not this header, is what makes libcurl actually
+        // decompress the response body. Measured: option default + this header = right position
+        // AND decompression; clearing the option = raw gzip bytes.
+        'accept-encoding': 'gzip, deflate, br, zstd',
+        priority: 'u=1, i',
+        // --- Suno application headers (the web client sends these to studio-api too) ---
+        'affiliate-id': 'undefined',
+        'device-id': `"${this.deviceId}"`,
+        'browser-token': `{"token":"${Buffer.from(JSON.stringify({ timestamp: Date.now() })).toString('base64')}"}`
+      })
     });
     // Raw `Cookie:` header strings carry no domain/path attributes, so seed the jar with an
     // explicit `Domain=.suno.com` for every known cookie. This reproduces the old behavior of
@@ -111,10 +213,20 @@ class SunoApi {
         'https://suno.com/'
       );
     }
+    // Bearer-token injection and header re-ordering share one interceptor on purpose: curl-cffi
+    // runs *request* interceptors last-registered-first (InterceptorManager.list() reverses for
+    // mode 'request'), so splitting these in two would run the re-order before the token was
+    // added and leave `authorization` appended at the very end of the header block.
     this.client.onRequest(opts => {
-      if (this.currentToken && !opts.headers?.Authorization) {
-        opts.headers = { ...opts.headers, Authorization: `Bearer ${this.currentToken}` };
+      const headers: Record<string, string> = { ...(opts.headers as Record<string, string>) };
+      const hasAuth = Object.keys(headers).some(k => k.toLowerCase() === 'authorization');
+      if (this.currentToken && !hasAuth) {
+        headers.authorization = `Bearer ${this.currentToken}`;
       }
+      // Per-request headers (Content-Type, Authorization, ...) are deep-merged onto the session
+      // headers by curl-cffi and land at the end of the object; re-sort so they sit where Chrome
+      // puts caller-supplied fetch headers instead.
+      opts.headers = SunoApi.orderHeaders(headers);
       return opts;
     });
     // curl-cffi-node never rejects for HTTP error statuses (only transport-level failures), so
@@ -218,189 +330,6 @@ class SunoApi {
       }
     }
     return true;
-  }
-
-  /**
-   * Clicks on a locator or XY vector. This method is made because of the difference between ghost-cursor-playwright and Playwright methods
-   */
-  private async click(target: Locator|Page, position?: { x: number, y: number }): Promise<void> {
-    if (this.ghostCursorEnabled) {
-      let pos: any = isPage(target) ? { x: 0, y: 0 } : await target.boundingBox();
-      if (position) 
-        pos = {
-          ...pos,
-          x: pos.x + position.x,
-          y: pos.y + position.y,
-          width: null,
-          height: null,
-        };
-      return this.cursor?.actions.click({
-        target: pos
-      });
-    } else {
-      if (isPage(target))
-        return target.mouse.click(position?.x ?? 0, position?.y ?? 0);
-      else
-        return target.click({ force: true, position });
-    }
-  }
-
-  /**
-   * Get the BrowserType from the `BROWSER` environment variable.
-   * @returns {BrowserType} chromium, firefox or webkit. Default is chromium
-   */
-  private getBrowserType() {
-    const browser = process.env.BROWSER?.toLowerCase();
-    switch (browser) {
-      case 'firefox':
-        return firefox;
-      /*case 'webkit': ** doesn't work with rebrowser-patches
-      case 'safari':
-        return webkit;*/
-      default:
-        return chromium;
-    }
-  }
-
-  /**
-   * Launches a browser with the necessary cookies
-   * @returns {BrowserContext}
-   */
-  private async launchBrowser(): Promise<BrowserContext> {
-    const args = [
-      '--disable-blink-features=AutomationControlled',
-      '--disable-web-security',
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-features=site-per-process',
-      '--disable-features=IsolateOrigins',
-      '--disable-extensions',
-      '--disable-infobars'
-    ];
-    // Check for GPU acceleration, as it is recommended to turn it off for Docker
-    if (yn(process.env.BROWSER_DISABLE_GPU, { default: false }))
-      args.push('--enable-unsafe-swiftshader',
-        '--disable-gpu',
-        '--disable-setuid-sandbox');
-    const browser = await this.getBrowserType().launch({
-      args,
-      headless: yn(process.env.BROWSER_HEADLESS, { default: true })
-    });
-    const context = await browser.newContext({ userAgent: this.userAgent, locale: process.env.BROWSER_LOCALE, viewport: null });
-    const cookies = [];
-    const lax: 'Lax' | 'Strict' | 'None' = 'Lax';
-    cookies.push({
-      name: '__session',
-      value: this.currentToken+'',
-      domain: '.suno.com',
-      path: '/',
-      sameSite: lax
-    });
-    for (const key in this.cookies) {
-      cookies.push({
-        name: key,
-        value: this.cookies[key]+'',
-        domain: '.suno.com',
-        path: '/',
-        sameSite: lax
-      })
-    }
-    await context.addCookies(cookies);
-    return context;
-  }
-
-
-  /**
-   * Opens a browser, fills in lyrics and style on the Suno create page, clicks create,
-   * captures the API response, waits 10 seconds, then returns the raw response data.
-   * Used as a captcha bypass when captchaRequired() returns true.
-   */
-  private async generateSongViaBrowser(prompt: string, tags?: string): Promise<any> {
-    logger.info('CAPTCHA required. Using browser to manually create song...');
-    const browser = await this.launchBrowser();
-    const page = await browser.newPage();
-
-    await page.goto('https://suno.com/create', {
-      referer: 'https://www.google.com/',
-      waitUntil: 'domcontentloaded',
-      timeout: 0
-    });
-
-    logger.info('Waiting for Suno interface to load');
-    // More robust than waiting on a specific API glob: wait for the create form itself.
-    const tablist = page.locator('span[role="tablist"]');
-    await tablist.waitFor({ state: 'visible', timeout: 60000 });
-
-    if (this.ghostCursorEnabled)
-      this.cursor = await createCursor(page);
-
-    // Switch to Advanced (custom) mode — target the button by aria-label, and only
-    // click if it isn't already the active tab.
-    const advancedTab = page.locator('button[role="tab"][aria-label="Advanced"]');
-    await advancedTab.waitFor({ timeout: 10000 });
-    if ((await advancedTab.getAttribute('aria-selected')) !== 'true') {
-      await this.click(advancedTab);
-    }
-
-    // Fill lyrics — the element has extra classes, so match on role + aria-label
-    // instead of an exact class string (which was the original bug).
-    const lyricsTextarea = page.locator('div[role="textbox"][aria-label="Lyrics editor"]');
-    await lyricsTextarea.waitFor({ state: 'visible', timeout: 30000 });
-    await this.click(lyricsTextarea);
-    await page.keyboard.type(
-      prompt,
-      { delay: 100 } // adjust to taste — 100-500ms is "visibly slow"
-    );
-
-    // Fill style textarea if tags provided
-    if (tags) {
-      const styleTextarea = page.locator('[data-testid="create-form-styles-wrapper"] textarea');
-      await styleTextarea.waitFor({ state: 'visible', timeout: 30000 });
-      await this.click(styleTextarea);
-      await page.keyboard.type(
-        tags,
-        { delay: 100 }
-      );
-    }
-
-    // Set up intercept BEFORE clicking so we don't miss the response
-    const responsePromise = page.waitForResponse(
-      resp => resp.url().includes('/api/generate/v2-web/') && resp.request().method() === 'POST',
-      { timeout: 40000 }
-    );
-
-    // Create button starts out disabled="" until the lyrics register.
-    // Wait for the disabled attribute to be removed before clicking.
-    const createButton = page.locator('button[aria-label="Create song"]');
-    await createButton.waitFor({ timeout: 30000 });
-    await page.waitForFunction(
-      () => {
-        const btn = document.querySelector('button[aria-label="Create song"]');
-        return !!btn && !btn.hasAttribute('disabled');
-      },
-      { timeout: 15000 }
-    );
-    await this.click(createButton);
-
-    logger.info('Create button clicked. Waiting for API response...');
-    const apiResponse = await responsePromise;
-    const responseData = await apiResponse.json();
-
-    logger.info('Song creation submitted via browser. Waiting 10 seconds before returning to normal flow...');
-    await sleep(10);
-
-    await browser.browser()?.close();
-    return responseData;
-  }
-
-  /**
-   * Imitates Cloudflare Turnstile loading error. Unused right now, left for future
-   */
-  private async getTurnstile() {
-    return this.client.post(
-      `https://clerk.suno.com/v1/client?__clerk_api_version=2021-02-05&_clerk_js_version=${SunoApi.CLERK_VERSION}&_method=PATCH`,
-      { captcha_error: '300030,300030,300030' },
-      { headers: { 'content-type': 'application/x-www-form-urlencoded' } });
   }
 
   /**
@@ -523,7 +452,13 @@ class SunoApi {
     let clips: any[];
 
     if (await this.captchaRequired()) {
-      const browserResult = await this.generateSongViaBrowser(prompt, tags);
+      const browserResult = await generateSongViaBrowser({
+        prompt,
+        tags,
+        cookies: this.cookies,
+        sessionToken: this.currentToken ?? '',
+        expectedUserAgent: this.userAgent
+      });
       clips = browserResult.clips;
     } else {
       const payload: any = {
@@ -773,26 +708,59 @@ class SunoApi {
     page?: string | null
   ): Promise<AudioInfo[]> {
     await this.keepAlive(false);
-    let url = new URL(`${SunoApi.BASE_URL}/api/feed/v2`);
-    if (songIds) {
-      url.searchParams.append('ids', songIds.join(','));
-    }
-    if (page) {
-      url.searchParams.append('page', page);
-    }
-    logger.info('Get audio status: ' + url.href);
-    const response = await this.client.get(url.href, {
-      // 10 seconds timeout
-      timeout: 10000
-    });
 
-    const audios = response.data.clips;
+    // Suno removed the old `/api/feed/v2` endpoint (it now 404s). Two successors replace it:
+    //   - by-ids:  fetch each clip via `/api/clip/{id}` (the batch `/api/clips/get_songs_by_ids`
+    //              only ever honors the last `ids=` value, so it can't be used for multiple ids)
+    //   - no-ids:  the cursor-based `/api/feed/v3` (POST) library feed
+    // Both return the same clip shape (`audio.metadata.*`) the old feed did, so the mapping below
+    // is shared. As before, ids that don't resolve are simply omitted from the result.
+    let clips: any[];
+    if (songIds && songIds.length > 0) {
+      logger.info('Get audio status for ids: ' + songIds.join(','));
+      const fetched = await Promise.all(
+        songIds.map(async (id) => {
+          try {
+            const response = await this.client.get(
+              `${SunoApi.BASE_URL}/api/clip/${id}`,
+              { timeout: 10000 }
+            );
+            return response.data;
+          } catch (error) {
+            logger.warn(`Failed to fetch clip ${id}: ${(error as Error).message}`);
+            return null;
+          }
+        })
+      );
+      clips = fetched.filter((clip) => clip != null);
+    } else {
+      // `page`, when provided, is treated as the opaque feed cursor (v3 is cursor-based, not
+      // page-numbered). Without it, the first page of the default workspace feed is returned.
+      const payload: any = {
+        cursor: page ?? null,
+        limit: 20,
+        filters: {
+          liked: 'False',
+          trashed: 'False',
+          fromStudioProject: { presence: 'False' },
+          stem: { presence: 'False' },
+          workspace: { presence: 'True', workspaceId: 'default' }
+        }
+      };
+      logger.info('Get audio feed (no ids)');
+      const response = await this.client.post(
+        `${SunoApi.BASE_URL}/api/feed/v3`,
+        payload,
+        { timeout: 10000 }
+      );
+      clips = response.data.clips ?? [];
+    }
 
-    return audios.map((audio: any) => ({
+    return clips.map((audio: any) => ({
       id: audio.id,
       title: audio.title,
       image_url: audio.image_url,
-      lyric: audio.metadata.prompt
+      lyric: audio.metadata?.prompt
         ? this.parseLyrics(audio.metadata.prompt)
         : '',
       audio_url: audio.audio_url,
@@ -800,12 +768,12 @@ class SunoApi {
       created_at: audio.created_at,
       model_name: audio.model_name,
       status: audio.status,
-      gpt_description_prompt: audio.metadata.gpt_description_prompt,
-      prompt: audio.metadata.prompt,
-      type: audio.metadata.type,
-      tags: audio.metadata.tags,
-      duration: audio.metadata.duration,
-      error_message: audio.metadata.error_message
+      gpt_description_prompt: audio.metadata?.gpt_description_prompt,
+      prompt: audio.metadata?.prompt,
+      type: audio.metadata?.type,
+      tags: audio.metadata?.tags,
+      duration: audio.metadata?.duration,
+      error_message: audio.metadata?.error_message
     }));
   }
 
