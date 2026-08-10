@@ -304,6 +304,24 @@ class SunoApi {
   }
 
   private async captchaRequired(): Promise<boolean> {
+    // Verification-only override, off by default.
+    //
+    // Suno answers `/api/c/check` with `required: false` a lot of the time, which makes the browser
+    // path unreachable on demand and therefore unverifiable on demand. Measured 2026-07-26: a
+    // generation returned 200 in 2.1s on the direct path and never launched a browser, so a run
+    // intended to exercise the Turnstile loop silently tested nothing. Set BROWSER_FORCE_CAPTCHA=true
+    // to take the browser path regardless.
+    //
+    // Do NOT set this in production: it trades a ~2s API call for a ~3min browser session (most of it
+    // humanized typing) and consumes the single CloakBrowser licence seat while it runs.
+    if (yn(process.env.BROWSER_FORCE_CAPTCHA, { default: false })) {
+      logger.warn(
+        'BROWSER_FORCE_CAPTCHA is set — using the browser path regardless of what /api/c/check says. ' +
+          'This is a verification override; unset it for normal operation.'
+      );
+      return true;
+    }
+
     // Suno's edge (Cloudflare) intermittently resets the connection on this
     // endpoint (ECONNRESET), so retry a few times with backoff. If the check
     // ultimately fails, assume a captcha IS required and let the captcha flow
